@@ -125,6 +125,8 @@ async function selectSymbol(sym) {
 }
 
 $("#run-scanner").addEventListener("click", runScanner);
+let lastSize = null;   // { shares } from /risk/size, used by Record trade
+
 $("#risk-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const body = {
@@ -141,13 +143,128 @@ $("#risk-form").addEventListener("submit", async (e) => {
       body: JSON.stringify({ proposed_dollar_risk: size.dollar_risk }),
     });
     $("#risk-output").textContent = JSON.stringify({ size, check }, null, 2);
+    lastSize = size;
+    $("#record-trade").disabled = !check.allowed || size.shares <= 0;
   } catch (e) {
     $("#risk-output").textContent = `error: ${e.message}`;
+    lastSize = null;
+    $("#record-trade").disabled = true;
   }
 });
+
+$("#record-trade").addEventListener("click", async () => {
+  if (!lastSize || !selectedSymbol) {
+    alert("Size a trade and select a symbol first.");
+    return;
+  }
+  const t1 = parseFloat($("#target1").value);
+  let regime = null;
+  try {
+    const r = await api("/regime/current");
+    regime = r.label;
+  } catch {}
+  const body = {
+    symbol: selectedSymbol,
+    side: $("#side").value,
+    shares: lastSize.shares,
+    entry: parseFloat($("#entry").value),
+    stop: parseFloat($("#stop").value),
+    target1: Number.isFinite(t1) ? t1 : null,
+    regime_at_open: regime,
+  };
+  try {
+    await api("/trades/open", { method: "POST", body: JSON.stringify(body) });
+    $("#record-trade").disabled = true;
+    await Promise.all([refreshJournal(), refreshRisk()]);
+  } catch (e) {
+    alert(`open failed: ${e.message}`);
+  }
+});
+
+async function refreshJournal() {
+  try {
+    const [trades, summary, bySetup] = await Promise.all([
+      api("/journal/today"),
+      api("/journal/summary"),
+      api("/journal/by-setup"),
+    ]);
+    const tbody = $("#journal-table tbody");
+    tbody.innerHTML = "";
+    trades.forEach((t) => {
+      const tr = document.createElement("tr");
+      const pnl = t.pnl == null ? "—" : t.pnl.toFixed(2);
+      const pnlCls = t.pnl == null ? "" : (t.pnl >= 0 ? "pos" : "neg");
+      const r = t.realized_r == null ? "—" : t.realized_r.toFixed(2);
+      const mistakes = t.mistakes.map(
+        (m) => `<span class="mistake">${m.replaceAll("_", " ")}</span>`
+      ).join("");
+      const actions = t.closed_at
+        ? ""
+        : `<button class="close-trade" data-id="${t.id}" data-sym="${t.symbol}">close</button>`;
+      tr.innerHTML = `
+        <td>${t.id}</td>
+        <td>${t.symbol}</td>
+        <td>${t.side}</td>
+        <td>${t.shares}</td>
+        <td>${t.entry.toFixed(2)}</td>
+        <td>${t.stop.toFixed(2)}</td>
+        <td>${t.target1 == null ? "—" : t.target1.toFixed(2)}</td>
+        <td>${t.exit_price == null ? "—" : t.exit_price.toFixed(2)}</td>
+        <td class="${pnlCls}">${pnl}</td>
+        <td class="${pnlCls}">${r}</td>
+        <td>${t.setup || "—"}</td>
+        <td>${t.regime_at_open || "—"}</td>
+        <td>${mistakes}</td>
+        <td>${actions}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    tbody.querySelectorAll(".close-trade").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const exit = prompt(`Exit price for ${btn.dataset.sym}?`);
+        if (!exit) return;
+        await api("/trades/close", {
+          method: "POST",
+          body: JSON.stringify({
+            trade_id: parseInt(btn.dataset.id),
+            exit_price: parseFloat(exit),
+          }),
+        });
+        await Promise.all([refreshJournal(), refreshRisk()]);
+      });
+    });
+    const s = summary;
+    const pnlCls = s.total_pnl >= 0 ? "pos" : "neg";
+    $("#journal-summary").innerHTML = `
+      ${s.n_total} trades · ${s.n_closed} closed ·
+      win ${(s.win_rate * 100).toFixed(0)}% ·
+      PnL <span class="${pnlCls}">${s.total_pnl.toFixed(2)}</span> ·
+      avg ${s.avg_r.toFixed(2)}R
+    `;
+    const bs = $("#by-setup-table tbody");
+    bs.innerHTML = "";
+    bySetup.forEach((row) => {
+      const tr = document.createElement("tr");
+      const exCls = row.expectancy_r >= 0 ? "pos" : "neg";
+      tr.innerHTML = `
+        <td>${row.setup.replaceAll("_", " ")}</td>
+        <td>${row.n}</td>
+        <td>${(row.win_rate * 100).toFixed(0)}%</td>
+        <td>${row.avg_r.toFixed(2)}</td>
+        <td class="${exCls}">${row.expectancy_r.toFixed(2)}</td>
+        <td>${row.total_pnl.toFixed(2)}</td>
+      `;
+      bs.appendChild(tr);
+    });
+  } catch (e) {
+    $("#journal-summary").textContent = `journal error: ${e.message}`;
+  }
+}
 
 runScanner().catch(() => {});
 refreshRisk();
 refreshRegime();
+refreshJournal();
 setInterval(refreshRisk, 15000);
 setInterval(refreshRegime, 30000);
+setInterval(refreshJournal, 20000);

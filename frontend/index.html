@@ -65,12 +65,45 @@
         <label>stop
           <input type="number" id="stop" step="0.01" />
         </label>
+        <label>target1 (optional)
+          <input type="number" id="target1" step="0.01" />
+        </label>
         <label>side
           <select id="side"><option value="long">long</option><option value="short">short</option></select>
         </label>
         <button type="submit">Size it</button>
+        <button type="button" id="record-trade" disabled>Record trade</button>
       </form>
       <pre id="risk-output"></pre>
+    </section>
+
+    <section class="panel" id="journal-panel">
+      <div class="panel-head">
+        <h2>4. Journal — today</h2>
+        <div id="journal-summary" class="muted">—</div>
+      </div>
+      <div class="journal-body">
+        <table id="journal-table">
+          <thead>
+            <tr>
+              <th>#</th><th>Sym</th><th>Side</th><th>Shares</th>
+              <th>Entry</th><th>Stop</th><th>T1</th>
+              <th>Exit</th><th>P&amp;L</th><th>R</th>
+              <th>Setup</th><th>Regime</th><th>Mistakes</th><th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="by-setup-wrap">
+          <h3>By setup</h3>
+          <table id="by-setup-table">
+            <thead>
+              <tr><th>Setup</th><th>N</th><th>Win %</th><th>Avg R</th><th>Expectancy R</th><th>P&amp;L</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
   </main>
 

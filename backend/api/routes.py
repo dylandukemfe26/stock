@@ -8,17 +8,25 @@ from pydantic import BaseModel
 
 from backend.config import get_settings
 from backend.core.cache import TTLCache
+from backend.core.events import get_bus
 from backend.data.provider import DataProvider, get_provider
+from backend.journal import JournalService
 from backend.liquidity import LiquidityService
 from backend.models.schemas import (
+    JournalSummary,
     LiquidityScore,
     PositionSizeRequest,
     PositionSizeResult,
     Regime,
+    RegimeStats,
     RiskStatus,
     RsSnapshot,
     ScannerHit,
     SetupSignal,
+    SetupStats,
+    TradeCloseRequest,
+    TradeOpenRequest,
+    TradeRow,
 )
 from backend.regime import RegimeDetector
 from backend.risk.engine import RiskConfig, RiskEngine
@@ -30,6 +38,7 @@ from backend.setups.detector import SetupDetector
 # Single shared engine instance for MVP. In production replace with a
 # per-user session or Redis-backed state.
 _risk_engine = RiskEngine()
+_journal = JournalService(bus=get_bus())
 
 # Shared caches so RS + Regime don't refetch SPY bars every request.
 _bar_cache = TTLCache(default_ttl_seconds=10.0)
@@ -43,6 +52,10 @@ def get_data_provider() -> DataProvider:
 
 def get_risk_engine() -> RiskEngine:
     return _risk_engine
+
+
+def get_journal() -> JournalService:
+    return _journal
 
 
 def get_rs_service(
@@ -198,3 +211,92 @@ def configure_risk(
 ) -> dict:
     engine.cfg = RiskConfig(**cfg.model_dump())
     return {"ok": True, "config": cfg.model_dump()}
+
+
+# ---------------- Journal / Trades ----------------
+@router.post("/trades/open", response_model=TradeRow)
+def open_trade(
+    req: TradeOpenRequest,
+    journal: JournalService = Depends(get_journal),
+    engine: RiskEngine = Depends(get_risk_engine),
+) -> TradeRow:
+    from backend.risk.engine import OpenPosition
+
+    row = journal.open(req)
+    engine.record_open(
+        OpenPosition(
+            symbol=row.symbol,
+            side=row.side,
+            shares=row.shares,
+            entry=row.entry,
+            stop=row.stop,
+            opened_at=row.opened_at,
+        )
+    )
+    return row
+
+
+@router.post("/trades/close", response_model=TradeRow)
+def close_trade(
+    req: TradeCloseRequest,
+    journal: JournalService = Depends(get_journal),
+    engine: RiskEngine = Depends(get_risk_engine),
+) -> TradeRow:
+    try:
+        row = journal.close(req.trade_id, req.exit_price, notes=req.notes)
+    except KeyError:
+        raise HTTPException(404, f"trade {req.trade_id} not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # Keep the risk engine's daily P&L in lockstep with the journal.
+    try:
+        engine.record_close(row.symbol, req.exit_price)
+    except ValueError:
+        pass
+    return row
+
+
+class MoveStopRequest(BaseModel):
+    new_stop: float
+
+
+@router.post("/trades/{trade_id}/move-stop", response_model=TradeRow)
+def move_stop(
+    trade_id: int,
+    body: MoveStopRequest,
+    journal: JournalService = Depends(get_journal),
+) -> TradeRow:
+    try:
+        return journal.move_stop(trade_id, body.new_stop)
+    except KeyError:
+        raise HTTPException(404, f"trade {trade_id} not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/journal/today", response_model=list[TradeRow])
+def journal_today(
+    journal: JournalService = Depends(get_journal),
+) -> list[TradeRow]:
+    return journal.today()
+
+
+@router.get("/journal/summary", response_model=JournalSummary)
+def journal_summary(
+    journal: JournalService = Depends(get_journal),
+) -> JournalSummary:
+    return journal.summary()
+
+
+@router.get("/journal/by-setup", response_model=list[SetupStats])
+def journal_by_setup(
+    journal: JournalService = Depends(get_journal),
+) -> list[SetupStats]:
+    return journal.by_setup()
+
+
+@router.get("/journal/by-regime", response_model=list[RegimeStats])
+def journal_by_regime(
+    journal: JournalService = Depends(get_journal),
+) -> list[RegimeStats]:
+    return journal.by_regime()

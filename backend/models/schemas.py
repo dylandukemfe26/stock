@@ -174,3 +174,89 @@ class RiskStatus(BaseModel):
     daily_loss_remaining: float
     halted: bool
     halt_reasons: list[str] = Field(default_factory=list)
+
+
+# ---------------- Journal ----------------
+
+class MistakeType(str, Enum):
+    EARLY_EXIT = "early_exit"
+    MOVED_STOP_AWAY = "moved_stop_away"
+    SIZED_UP_AFTER_LOSS = "sized_up_after_loss"
+    NO_STOP = "no_stop"
+    OVERSIZED = "oversized"
+
+
+class TradeOpenRequest(BaseModel):
+    symbol: str
+    side: Side
+    shares: int = Field(gt=0)
+    entry: float
+    stop: float
+    target1: float | None = None
+    setup: SetupType | None = None
+    signal_id: int | None = None
+    # Context captured at open for later analytics
+    regime_at_open: str | None = None
+    rs_pct_at_open: float | None = None
+    liquidity_tier_at_open: str | None = None
+    catalyst_at_open: str | None = None
+    notes: str = ""
+    emotion: str | None = None
+
+
+class TradeCloseRequest(BaseModel):
+    trade_id: int
+    exit_price: float
+    notes: str | None = None
+
+
+class TradeRow(BaseModel):
+    id: int
+    symbol: str
+    side: Side
+    shares: int
+    entry: float
+    stop: float
+    target1: float | None
+    exit_price: float | None
+    pnl: float | None
+    realized_r: float | None       # pnl / (shares * |entry - stop|)
+    setup: str | None
+    opened_at: datetime
+    closed_at: datetime | None
+    hold_minutes: int | None
+    regime_at_open: str | None
+    rs_pct_at_open: float | None
+    liquidity_tier_at_open: str | None
+    mistakes: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class SetupStats(BaseModel):
+    setup: str
+    n: int
+    win_rate: float          # 0..1
+    avg_r: float             # average realized R across closed trades
+    expectancy_r: float      # win_rate*avg_win_r + (1-win_rate)*avg_loss_r
+    total_pnl: float
+
+
+class RegimeStats(BaseModel):
+    regime: str
+    n: int
+    win_rate: float
+    expectancy_r: float
+    total_pnl: float
+
+
+class JournalSummary(BaseModel):
+    trading_day: date
+    n_total: int
+    n_open: int
+    n_closed: int
+    win_rate: float
+    total_pnl: float
+    avg_r: float
+    best_trade_pnl: float
+    worst_trade_pnl: float
+    mistakes_count: dict[str, int]
