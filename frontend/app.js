@@ -40,12 +40,21 @@ async function runScanner() {
     const tr = document.createElement("tr");
     tr.dataset.symbol = h.symbol;
     const gapCls = h.gap_pct >= 0 ? "pos" : "neg";
+    const rsCls = h.rs_flag ? `rs-${h.rs_flag}` : "";
+    const liqCls = h.liquidity_tier ? `liq-${h.liquidity_tier}` : "";
+    const rsPct = h.rs_pct == null ? "—" : `${h.rs_pct >= 0 ? "+" : ""}${h.rs_pct.toFixed(2)}%`;
+    const pers = h.rs_persistence == null ? "—" : `${Math.round(h.rs_persistence * 100)}%`;
+    const tier = h.liquidity_tier || "—";
+    const spread = h.spread_pct == null ? "—" : `${h.spread_pct.toFixed(2)}%`;
     tr.innerHTML = `
       <td>${h.symbol}</td>
       <td>${h.price.toFixed(2)}</td>
       <td class="${gapCls}">${h.gap_pct.toFixed(2)}</td>
       <td>${h.relative_volume.toFixed(1)}x</td>
-      <td>${h.premarket_volume.toLocaleString()}</td>
+      <td class="${rsCls}">${rsPct}</td>
+      <td class="${rsCls}">${pers}</td>
+      <td class="${liqCls}">${tier}</td>
+      <td>${spread}</td>
       <td>${h.atr_14d.toFixed(2)}</td>
       <td>${h.score.toFixed(1)}</td>
       <td>${h.side_bias || ""}</td>
@@ -54,6 +63,19 @@ async function runScanner() {
     tr.addEventListener("click", () => selectSymbol(h.symbol));
     tbody.appendChild(tr);
   });
+}
+
+async function refreshRegime() {
+  try {
+    const r = await api("/regime/current");
+    const el = $("#regime-chip");
+    el.className = `chip ${r.label}`;
+    el.textContent = `regime: ${r.label.replace("_", " ")}`;
+    el.title =
+      `trend_score ${r.trend_score.toFixed(2)} · range_ratio ${r.range_ratio.toFixed(2)}`;
+  } catch (e) {
+    $("#regime-chip").textContent = `regime: err`;
+  }
 }
 
 async function selectSymbol(sym) {
@@ -126,4 +148,6 @@ $("#risk-form").addEventListener("submit", async (e) => {
 
 runScanner().catch(() => {});
 refreshRisk();
+refreshRegime();
 setInterval(refreshRisk, 15000);
+setInterval(refreshRegime, 30000);

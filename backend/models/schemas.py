@@ -62,6 +62,13 @@ class ScannerHit(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     side_bias: Side | None = None  # long if gap up, short if gap down
     asof: datetime
+    # Phase 1 enrichments (optional so backtests/tests without the services work)
+    rs_pct: float | None = None
+    rs_persistence: float | None = None
+    rs_flag: str | None = None
+    liquidity_tier: str | None = None
+    liquidity_score: float | None = None
+    spread_pct: float | None = None
 
 
 class SetupType(str, Enum):
@@ -107,6 +114,53 @@ class PositionSizeResult(BaseModel):
     risk_per_share: float
     stop_distance_pct: float
     notes: list[str] = Field(default_factory=list)
+
+
+class StrengthFlag(str, Enum):
+    LEADER = "leader"
+    LAGGARD = "laggard"
+    NEUTRAL = "neutral"
+
+
+class RsSnapshot(BaseModel):
+    symbol: str
+    benchmark: str
+    session_rs_pct: float         # session return spread vs benchmark, in %
+    persistence: float            # 0..1: fraction of recent bars outperforming
+    strength: StrengthFlag
+    asof: datetime
+
+
+class LiquidityTier(str, Enum):
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class LiquidityScore(BaseModel):
+    symbol: str
+    spread_pct: float
+    est_round_trip_slippage_pct: float
+    tradeability: float           # 0..100
+    tier: LiquidityTier
+    asof: datetime
+
+
+class RegimeLabel(str, Enum):
+    TREND_UP = "trend_up"
+    TREND_DOWN = "trend_down"
+    CHOP = "chop"
+    VOLATILE = "volatile"
+    MIXED = "mixed"
+
+
+class Regime(BaseModel):
+    label: RegimeLabel
+    trend_score: float            # abs(slope) / ATR; >0.5 = strong trend
+    range_ratio: float            # last bar range / ATR
+    pct_above_vwap: float | None  # breadth proxy, optional
+    vix: float | None = None
+    asof: datetime
 
 
 class RiskStatus(BaseModel):

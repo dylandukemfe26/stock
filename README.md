@@ -432,14 +432,37 @@ backend/
   main.py               # FastAPI app
   config.py             # env-driven settings
   api/routes.py         # HTTP surface
+  core/                 # Phase 1 — event bus, TTL cache
   data/                 # provider ABC + mock/polygon impls
   scanner/              # Program 1 — gap & volume
   setups/               # Program 2 — setup detection + indicators
   risk/                 # Program 3 — risk engine
+  rs/                   # Program 4 — relative strength (vs SPY)
+  liquidity/            # Program 5 — spread + tradeability
+  regime/               # Program 6 — market regime detector
   db/models.py          # SQLAlchemy (phase 2)
   models/schemas.py     # shared pydantic models
 frontend/
   index.html, styles.css, app.js
 tests/
-  test_scanner.py, test_setups.py, test_risk.py
+  test_scanner.py, test_setups.py, test_risk.py,
+  test_rs.py, test_liquidity.py, test_regime.py
 ```
+
+## Phase 1 additions (RS / Liquidity / Regime)
+
+Three new services are wired into the existing scanner + API:
+
+- `backend/rs/` — session RS vs SPY with directional persistence. Scanner
+  ranking boosts `leader` names aligned with gap direction, fades
+  `laggard` names that would fight the gap. Exposed at `GET /api/rs/{symbol}`.
+- `backend/liquidity/` — spread% + ADV → A/B/C tier. Scanner hard-drops
+  tier C and deducts 5 score from tier B. `GET /api/liquidity/{symbol}`.
+- `backend/regime/` — SPY slope + range ratio → one of
+  `trend_up / trend_down / chop / volatile / mixed`. Shown as a chip in
+  the UI header. `GET /api/regime/current`.
+- `backend/core/events.py` — simple EventBus for Phase 2 consumers.
+- `backend/core/cache.py` — TTL memoization in front of provider calls.
+
+The scanner table now shows `RS vs SPY`, `Pers`, `Liq`, and `Spread`
+columns alongside the originals.

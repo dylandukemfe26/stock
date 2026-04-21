@@ -56,11 +56,23 @@ tbody tr:hover { background: #1c2128; }
 tbody tr.selected { background: #1f6feb33; }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
-.risk-summary {
+.header-right { display: flex; gap: 8px; align-items: center; }
+.risk-summary, .chip {
   font-size: 12px; color: var(--muted);
   padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px;
 }
 .risk-summary.halted { color: var(--red); border-color: var(--red); }
+.chip.trend-up    { color: var(--green); border-color: var(--green); }
+.chip.trend-down  { color: var(--red);   border-color: var(--red); }
+.chip.chop        { color: var(--warn);  border-color: var(--warn); }
+.chip.volatile    { color: var(--warn);  border-color: var(--warn); }
+
+.rs-leader  { color: var(--green); font-weight: 600; }
+.rs-laggard { color: var(--red);   font-weight: 600; }
+.rs-neutral { color: var(--muted); }
+.liq-A { color: var(--green); font-weight: 600; }
+.liq-B { color: var(--warn);  font-weight: 600; }
+.liq-C { color: var(--red);   font-weight: 600; }
 .setup-card {
   border: 1px solid var(--border); border-radius: 6px;
   padding: 10px; margin-bottom: 8px;

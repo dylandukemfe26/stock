@@ -22,6 +22,13 @@ _UNIVERSE = [
     "AMC", "BABA", "PDD", "NIO", "XPEV", "TSM",
 ]
 
+# Benchmarks produced by the mock provider in addition to the tradeable universe.
+BENCHMARKS = ["SPY", "QQQ"]
+
+# Spread profile: most active large caps trade at pennies wide. Thin mid-caps
+# trade several cents wide. Mock both so the liquidity analyzer has signal.
+_THIN_SYMBOLS = {"BBAI", "LCID", "RIOT", "MARA", "AMC", "SOFI", "NIO", "XPEV"}
+
 
 def _seed_for(symbol: str, asof: date) -> int:
     key = f"{symbol}:{asof.isoformat()}".encode()
@@ -33,6 +40,20 @@ class MockProvider(DataProvider):
         return list(_UNIVERSE)
 
     def get_daily_stats(self, symbol: str, asof: date) -> DailyStats:
+        # Benchmarks have their own stable profile so RS calculations are meaningful.
+        if symbol in BENCHMARKS:
+            rng = random.Random(_seed_for(symbol, asof) ^ 0xA1)
+            prev_close = 450.0 if symbol == "SPY" else 380.0
+            avg_volume = 80_000_000 if symbol == "SPY" else 40_000_000
+            atr = round(prev_close * rng.uniform(0.005, 0.015), 2)
+            return DailyStats(
+                symbol=symbol,
+                prev_close=prev_close,
+                avg_volume_20d=avg_volume,
+                avg_dollar_volume_20d=prev_close * avg_volume,
+                atr_14d=atr,
+                float_shares=1_000_000_000,
+            )
         rng = random.Random(_seed_for(symbol, asof) ^ 0xA1)
         prev_close = round(rng.uniform(5, 500), 2)
         avg_volume = int(rng.uniform(1_000_000, 40_000_000))
@@ -51,6 +72,10 @@ class MockProvider(DataProvider):
     def get_premarket_snapshot(
         self, symbol: str, asof: date
     ) -> PremarketSnapshot | None:
+        # Benchmarks don't gap — they give us the market baseline.
+        if symbol in BENCHMARKS:
+            return None
+
         stats = self.get_daily_stats(symbol, asof)
         rng = random.Random(_seed_for(symbol, asof) ^ 0xB2)
 
@@ -81,11 +106,18 @@ class MockProvider(DataProvider):
         today = date.today()
         snap = self.get_premarket_snapshot(symbol, today)
         last = snap.last if snap else self.get_daily_stats(symbol, today).prev_close
+        # Spread model: thin names trade wider. Scales with price.
+        rng = random.Random(_seed_for(symbol, today) ^ 0xD4)
+        if symbol in _THIN_SYMBOLS:
+            spread = max(0.02, last * rng.uniform(0.0015, 0.004))
+        else:
+            spread = max(0.01, last * rng.uniform(0.0002, 0.0008))
+        half = spread / 2
         return Quote(
             symbol=symbol,
             last=last,
-            bid=round(last - 0.01, 2),
-            ask=round(last + 0.01, 2),
+            bid=round(last - half, 2),
+            ask=round(last + half, 2),
             ts=datetime.now(timezone.utc),
         )
 

@@ -17,7 +17,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
 from backend.data.provider import DataProvider
-from backend.models.schemas import ScannerHit, Side
+from backend.liquidity import LiquidityService
+from backend.models.schemas import LiquidityTier, ScannerHit, Side, StrengthFlag
+from backend.rs import RSService
 from backend.scanner.ranking import rank_score
 
 # Assumption: ~5% of normal daily volume typically trades premarket for
@@ -34,12 +36,22 @@ class ScannerConfig:
     max_price: float = 2_000.0
     min_avg_dollar_volume: float = 10_000_000.0
     top_n: int = 30
+    # Phase 1: drop names flagged as tier C (illiquid or wide-spread).
+    drop_tier_c: bool = True
 
 
 class GapVolumeScanner:
-    def __init__(self, provider: DataProvider, config: ScannerConfig | None = None):
+    def __init__(
+        self,
+        provider: DataProvider,
+        config: ScannerConfig | None = None,
+        rs_service: RSService | None = None,
+        liquidity_service: LiquidityService | None = None,
+    ):
         self.provider = provider
         self.cfg = config or ScannerConfig()
+        self.rs = rs_service
+        self.liq = liquidity_service
 
     def scan(self, asof: date | None = None) -> list[ScannerHit]:
         asof = asof or date.today()
@@ -76,12 +88,46 @@ class GapVolumeScanner:
             return None
 
         atr_pct = stats.atr_14d / stats.prev_close * 100.0
+        side_bias = Side.LONG if gap_pct > 0 else Side.SHORT
+
+        liq = self.liq.score(symbol) if self.liq else None
+        if liq is not None and self.cfg.drop_tier_c and liq.tier == LiquidityTier.C:
+            return None
+
+        rs_snap = self.rs.snapshot(symbol, asof) if self.rs else None
+
         score, reasons = rank_score(
             gap_pct=gap_pct,
             rvol=rvol,
             atr_pct=atr_pct,
             avg_dollar_volume=stats.avg_dollar_volume_20d,
         )
+
+        # RS nudge: boost leaders aligned with gap bias, fade contrarian RS.
+        if rs_snap is not None:
+            aligned_leader = (
+                rs_snap.strength == StrengthFlag.LEADER and side_bias == Side.LONG
+            ) or (
+                rs_snap.strength == StrengthFlag.LAGGARD and side_bias == Side.SHORT
+            )
+            aligned_contra = (
+                rs_snap.strength == StrengthFlag.LAGGARD and side_bias == Side.LONG
+            ) or (
+                rs_snap.strength == StrengthFlag.LEADER and side_bias == Side.SHORT
+            )
+            if aligned_leader:
+                score += 8
+                reasons.append(f"RS {rs_snap.strength.value} aligned")
+            elif aligned_contra:
+                score -= 8
+                reasons.append(f"RS {rs_snap.strength.value} against gap")
+
+        # Liquidity nudge: tier B is usable but less attractive than A.
+        if liq is not None:
+            if liq.tier == LiquidityTier.B:
+                score -= 5
+                reasons.append("liquidity tier B")
+            reasons.append(f"spread {liq.spread_pct:.2f}%")
 
         return ScannerHit(
             symbol=symbol,
@@ -93,6 +139,12 @@ class GapVolumeScanner:
             atr_14d=stats.atr_14d,
             score=round(score, 2),
             reasons=reasons,
-            side_bias=Side.LONG if gap_pct > 0 else Side.SHORT,
+            side_bias=side_bias,
             asof=datetime.now(timezone.utc),
+            rs_pct=rs_snap.session_rs_pct if rs_snap else None,
+            rs_persistence=rs_snap.persistence if rs_snap else None,
+            rs_flag=rs_snap.strength.value if rs_snap else None,
+            liquidity_tier=liq.tier.value if liq else None,
+            liquidity_score=liq.tradeability if liq else None,
+            spread_pct=liq.spread_pct if liq else None,
         )

@@ -7,15 +7,22 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from backend.config import get_settings
+from backend.core.cache import TTLCache
 from backend.data.provider import DataProvider, get_provider
+from backend.liquidity import LiquidityService
 from backend.models.schemas import (
+    LiquidityScore,
     PositionSizeRequest,
     PositionSizeResult,
+    Regime,
     RiskStatus,
+    RsSnapshot,
     ScannerHit,
     SetupSignal,
 )
+from backend.regime import RegimeDetector
 from backend.risk.engine import RiskConfig, RiskEngine
+from backend.rs import RSService
 from backend.scanner.scanner import GapVolumeScanner, ScannerConfig
 from backend.setups.detector import SetupDetector
 
@@ -24,6 +31,11 @@ from backend.setups.detector import SetupDetector
 # per-user session or Redis-backed state.
 _risk_engine = RiskEngine()
 
+# Shared caches so RS + Regime don't refetch SPY bars every request.
+_bar_cache = TTLCache(default_ttl_seconds=10.0)
+_quote_cache = TTLCache(default_ttl_seconds=5.0)
+_regime_cache = TTLCache(default_ttl_seconds=60.0)
+
 
 def get_data_provider() -> DataProvider:
     return get_provider()
@@ -31,6 +43,24 @@ def get_data_provider() -> DataProvider:
 
 def get_risk_engine() -> RiskEngine:
     return _risk_engine
+
+
+def get_rs_service(
+    provider: DataProvider = Depends(get_data_provider),
+) -> RSService:
+    return RSService(provider, cache=_bar_cache)
+
+
+def get_liquidity_service(
+    provider: DataProvider = Depends(get_data_provider),
+) -> LiquidityService:
+    return LiquidityService(provider, cache=_quote_cache)
+
+
+def get_regime_detector(
+    provider: DataProvider = Depends(get_data_provider),
+) -> RegimeDetector:
+    return RegimeDetector(provider, cache=_regime_cache)
 
 
 router = APIRouter(prefix="/api", tags=["trading"])
@@ -43,6 +73,8 @@ def run_scanner(
     min_rvol: float | None = Query(None),
     top_n: int = Query(30, ge=1, le=100),
     provider: DataProvider = Depends(get_data_provider),
+    rs: RSService = Depends(get_rs_service),
+    liq: LiquidityService = Depends(get_liquidity_service),
 ) -> list[ScannerHit]:
     s = get_settings()
     cfg = ScannerConfig(
@@ -54,8 +86,37 @@ def run_scanner(
         min_avg_dollar_volume=s.min_avg_dollar_volume,
         top_n=top_n,
     )
-    scanner = GapVolumeScanner(provider, cfg)
+    scanner = GapVolumeScanner(provider, cfg, rs_service=rs, liquidity_service=liq)
     return scanner.scan()
+
+
+# ---------------- Relative Strength ----------------
+@router.get("/rs/{symbol}", response_model=RsSnapshot)
+def rs_snapshot(
+    symbol: str,
+    rs: RSService = Depends(get_rs_service),
+) -> RsSnapshot:
+    snap = rs.snapshot(symbol.upper())
+    if snap is None:
+        raise HTTPException(404, f"no RS data for {symbol}")
+    return snap
+
+
+# ---------------- Liquidity ----------------
+@router.get("/liquidity/{symbol}", response_model=LiquidityScore)
+def liquidity_score(
+    symbol: str,
+    liq: LiquidityService = Depends(get_liquidity_service),
+) -> LiquidityScore:
+    return liq.score(symbol.upper())
+
+
+# ---------------- Regime ----------------
+@router.get("/regime/current", response_model=Regime)
+def regime_current(
+    detector: RegimeDetector = Depends(get_regime_detector),
+) -> Regime:
+    return detector.current()
 
 
 # ---------------- Setups ----------------
